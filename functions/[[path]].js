@@ -1,12 +1,11 @@
 /**
  * DoH Proxy Pro - PUBG Mobile & Privacy Edition
- * RFC 8484-compatible DNS proxy with embedded Web UI, stats page, and caching.
+ * RFC 8484-compatible DNS proxy with sequential failover and caching.
  */
 
 const CONFIG = Object.freeze({
   DNS_PATH: "/dns-query",
   HEALTH_PATH: "/health",
-  STATS_PATH: "/stats",
   UPSTREAM_TIMEOUT_MS: 1800,
   MAX_QUERY_BYTES: 4096,
   MAX_RESPONSE_BYTES: 4096,
@@ -25,8 +24,6 @@ const CONFIG = Object.freeze({
     { name: "Mullvad", url: "https://doh.mullvad.net/dns-query" }
   ]
 });
-
-let globalRequestCount = 0;
 
 function responseHeaders(extra = {}) {
   return {
@@ -353,129 +350,6 @@ async function getDnsPacket(request) {
   throw new TypeError("Method not allowed");
 }
 
-function renderHomePage(requestUrl) {
-  const url = new URL(requestUrl);
-  const dohUrl = `${url.protocol}//${url.hostname}${CONFIG.DNS_PATH}`;
-  const statsUrl = `${url.protocol}//${url.hostname}${CONFIG.STATS_PATH}`;
-
-  const html = `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>DoH Proxy Pro — DNS over HTTPS</title>
-<style>
-:root {
-  --bg: #0d1117;
-  --card: #161b22;
-  --border: #30363d;
-  --text: #e6edf3;
-  --muted: #8b949e;
-  --accent: #4493f8;
-  --success: #3fb950;
-  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  --mono: ui-monospace, SFMono-regular, Consolas, monospace;
-}
-* { margin: 0; padding: 0; box-sizing: border-box; }
-body { font-family: var(--font); background: var(--bg); color: var(--text); padding: 2rem; line-height: 1.6; }
-.container { max-width: 800px; margin: 0 auto; }
-h1 { color: var(--accent); margin-bottom: 0.5rem; font-size: 2rem; }
-.subtitle { color: var(--muted); margin-bottom: 2rem; }
-.card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 1.5rem; margin-bottom: 1.5rem; }
-h3 { margin-bottom: 1rem; color: var(--text); font-size: 1.1rem; }
-.url-box { background: #010409; border: 1px solid var(--border); padding: 1rem; border-radius: 6px; font-family: var(--mono); color: #a5d6ff; word-break: break-all; margin-bottom: 1rem; }
-.btn { background: var(--success); color: white; border: none; padding: 0.6rem 1.2rem; border-radius: 6px; font-weight: bold; cursor: pointer; text-decoration: none; display: inline-block; }
-.btn:hover { opacity: 0.9; }
-.btn-secondary { background: var(--accent); margin-left: 0.5rem; }
-ul { padding-left: 1.5rem; color: var(--muted); }
-li { margin-bottom: 0.5rem; }
-</style>
-</head>
-<body>
-<div class="container">
-  <h1>🛡️ DoH Proxy Pro</h1>
-  <p class="subtitle">Optimized Secure DNS-over-HTTPS Proxy for Gaming and Privacy</p>
-
-  <div class="card">
-    <h3>📍 Your DoH Endpoint URL</h3>
-    <div class="url-box" id="dohUrl">${dohUrl}</div>
-    <button class="btn" onclick="navigator.clipboard.writeText('${dohUrl}'); alert('Copied to clipboard!');">📋 Copy Endpoint</button>
-    <a href="${statsUrl}" class="btn btn-secondary">📊 View Live Statistics</a>
-  </div>
-
-  <div class="card">
-    <h3>⚙️ Configured Upstream Resolvers</h3>
-    <ul>
-      ${CONFIG.RESOLVERS.map(r => `<li><strong>${r.name}</strong>: <code>${r.url}</code></li>`).join('')}
-    </ul>
-  </div>
-
-  <div class="card">
-    <h3>📱 How to Use</h3>
-    <p><strong>Browsers (Firefox, Chrome, Edge):</strong> Go to privacy/security settings, enable Secure DNS, choose Custom, and paste your Endpoint URL.</p>
-    <p style="margin-top: 0.8rem;"><strong>Android (Intra / Private DNS):</strong> Paste your Endpoint URL into Intra or Android Private DNS configuration.</p>
-  </div>
-</div>
-</body>
-</html>`;
-
-  return new Response(html, {
-    status: 200,
-    headers: { "Content-Type": "text/html; charset=utf-8" }
-  });
-}
-
-function renderStatsPage(requestUrl) {
-  const url = new URL(requestUrl);
-  const homeUrl = `${url.protocol}//${url.hostname}/`;
-
-  const html = `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>DoH Proxy - Statistics</title>
-<style>
-:root { --bg: #0d1117; --card: #161b22; --border: #30363d; --text: #e6edf3; --muted: #8b949e; --accent: #4493f8; --success: #3fb950; }
-* { margin: 0; padding: 0; box-sizing: border-box; }
-body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); padding: 2rem; }
-.container { max-width: 800px; margin: 0 auto; }
-h1 { color: var(--accent); margin-bottom: 1rem; }
-.card { background: var(--card); border: 1px solid var(--border); padding: 1.5rem; border-radius: 10px; margin-bottom: 1.5rem; }
-.val { font-size: 2rem; font-weight: bold; color: var(--accent); font-family: monospace; }
-table { width: 100%; border-collapse: collapse; background: var(--card); border-radius: 8px; overflow: hidden; margin-top: 1rem; }
-th, td { padding: 1rem; text-align: left; border-bottom: 1px solid var(--border); font-family: monospace; }
-th { background: #010409; color: var(--muted); font-family: sans-serif; font-size: 0.85rem; }
-.btn { background: var(--success); color: white; border: none; padding: 0.6rem 1.2rem; border-radius: 6px; font-weight: bold; cursor: pointer; text-decoration: none; display: inline-block; margin-top: 1rem; }
-</style>
-</head>
-<body>
-<div class="container">
-  <h1>📊 Server Statistics</h1>
-  <div class="card">
-    <h3>Total Handled Requests</h3>
-    <div class="val">${globalRequestCount}</div>
-  </div>
-  <div class="card">
-    <h3>Active Upstream Resolvers</h3>
-    <table>
-      <thead><tr><th>#</th><th>Resolver Name</th><th>Endpoint URL</th></tr></thead>
-      <tbody>
-        ${CONFIG.RESOLVERS.map((r, i) => `<tr><td>${i + 1}</td><td><strong>${r.name}</strong></td><td>${r.url}</td></tr>`).join('')}
-      </tbody>
-    </table>
-  </div>
-  <a href="${homeUrl}" class="btn">← Back to Home</a>
-</div>
-</body>
-</html>`;
-
-  return new Response(html, {
-    status: 200,
-    headers: { "Content-Type": "text/html; charset=utf-8" }
-  });
-}
-
 export default {
   async fetch(request) {
     const url = new URL(request.url);
@@ -484,36 +358,20 @@ export default {
       return new Response(null, { status: 204, headers: responseHeaders() });
     }
 
-    if (url.pathname === "/" && request.method === "GET") {
-      return renderHomePage(request.url);
-    }
-
-    if (url.pathname === CONFIG.STATS_PATH && request.method === "GET") {
-      return renderStatsPage(request.url);
-    }
-
     if (url.pathname === CONFIG.HEALTH_PATH && request.method === "GET") {
       return new Response(JSON.stringify({
         status: "ok",
-        service: "DoH Proxy Pro",
-        protocol: "RFC 8484",
-        resolverCount: CONFIG.RESOLVERS.length,
-        resolverOrder: CONFIG.RESOLVERS.map(item => item.name)
-      }, null, 2), {
+        service: "PUBG Mobile DoH Proxy",
+        protocol: "DNS-over-HTTPS",
+        resolvers: CONFIG.RESOLVERS.map(r => r.name)
+      }), {
         status: 200,
         headers: responseHeaders({ "Content-Type": "application/json; charset=utf-8" })
       });
     }
 
-    if (url.pathname !== CONFIG.DNS_PATH) {
-      return textResponse(404, "Not Found");
-    }
-
-    if (request.method !== "GET" && request.method !== "POST") {
-      return textResponse(405, "Method Not Allowed");
-    }
-
-    globalRequestCount++;
+    if (url.pathname !== CONFIG.DNS_PATH) return httpError(404, "Not Found");
+    if (request.method !== "GET" && request.method !== "POST") return httpError(405, "Method Not Allowed");
 
     try {
       const packet = await getDnsPacket(request);
@@ -528,23 +386,19 @@ export default {
         })
       });
     } catch (error) {
-      if (error instanceof TypeError) {
+      if (error instanceof TypeError && error.message.includes("Content-Type")) {
         return httpError(415, error.message);
       }
-      if (error instanceof RangeError) {
+      if (error instanceof TypeError && error.message.includes("Method")) {
+        return httpError(405, error.message);
+      }
+      if (error instanceof RangeError || error.message.includes("size limit")) {
         return httpError(413, "DNS message too large");
       }
-      if (error.name === "AbortError") {
+      if (error.message.includes("timeout") || error.name === "AbortError") {
         return httpError(504, "DNS upstream timeout");
       }
       return httpError(502, "DNS resolution failed");
     }
   }
 };
-
-function textResponse(status, message) {
-  return new Response(message, {
-    status,
-    headers: responseHeaders({ "Content-Type": "text/plain; charset=utf-8" })
-  });
-}
